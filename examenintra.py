@@ -68,7 +68,7 @@ print(f"Ratio de valeurs uniques pour issn : {journal['issn'].nunique() / journa
 
 # %%
 """
-L'index et les ISSN sont bien unique.
+L'index et les ISSN sont bien uniques.
 
 La colonne `journal_name` ne semble pas avoir de problème mis à part quelques données dupliquées.
 """
@@ -118,10 +118,10 @@ price.head()
 # %%
 """
 Nous pouvons déjà observer les colonnes suivantes et imaginer une petite description :
-- **price** (valeur continue) : le prix de l'ACP (Article Publication Charge)
-- **date_stamp** (valeur temporelle) : horodatage représentant la date de création de l'entrée.
-- **journal_id** (valeur catégorique) : il s'agit de l'ISSN du journal
-- **influence_id** (valeur catégorique) : on pourrait supposer qu'il s'agit d'un lien vers les lignes de la table
+- **price** (valeur continue) : Le prix de l'ACP (Article Publication Charge)
+- **date_stamp** (valeur temporelle) : Horodatage représentant la date de création de l'entrée.
+- **journal_id** (valeur catégorique) : Il s'agit de l'ISSN du journal
+- **influence_id** (valeur catégorique) : On pourrait supposer qu'il s'agit d'un lien vers les lignes de la table
 `influence` mais la majorité des id situés dans cette colonne sont supérieurs au nombre de lignes que possède la table
 `influence` ce qui consititue alors des valeurs abérantes.
 - **url** (valeur catégorique) : L'adresse web de la revue vers la page d'informations pour les auteurs.
@@ -140,12 +140,16 @@ manquantes.
 """
 
 # %%
-print("Statistiques de la colonne price:")
-print(f"- min : {price['price'].min():.0f}")
-print(f"- max : {price['price'].max():.0f}")
-print(f"- moyenne : {price['price'].mean():.3f}")
-print(f"- varience : {price['price'].var():.3f}")
-sns.distplot(price["price"])
+def show_continuous_col_stats(df, column):
+    print(f"Statistiques de la colonne {column} :")
+    print(f"- min : {df[column].min():.2f}")
+    print(f"- max : {df[column].max():.2f}")
+    print(f"- moyenne : {df[column].mean():.2f}")
+    print(f"- varience : {df[column].var():.2f}")
+    print(f"- mode : {df[column].mode()[0]:.2f}")
+    sns.distplot(df[column].dropna())
+
+show_continuous_col_stats(price, "price")
 
 # %%
 """
@@ -199,12 +203,18 @@ des id de la table `influence`. Cette colonne ne semble donc pas être utile.
 
 # %%
 print("Valeur(s) abérente(s) pour la colonne url :")
-price[~price["url"].str.startswith("http", na=True)]["url"]
+incoherent_influence_url = price[~price["url"].str.startswith("http", na=True)]
+for index, row in incoherent_influence_url.iterrows():
+    print(f"{index} : {row['url']}")
+
+# remove incoherent values
+for index in incoherent_influence_url.index:
+    influence.at[index, "url"] = np.NaN
 
 # %%
 """
-Bien qu'on ne retrouve qu'une seule valeur abérante, la majorité des valeurs reste manquente. Cela nuit donc à l'interêt
-de cette colonne.
+Bien qu'on ne retrouve qu'une seule valeur abérante, la majorité des valeurs reste manquente. Cela nuit donc fortement à
+l'interêt de cette colonne.
 """
 
 # %%
@@ -231,13 +241,13 @@ influence.head()
 # %%
 """
 Nous pouvons déjà observer les colonnes suivantes et imaginer une petite description :
-- **journal_name** (valeur catégorique) : 
-- **issn** (valeur catégorique) : 
-- **citation_count_sum** (valeur continue) : 
-- **paper_count_sum** (valeur continue) : 
-- **avg_cites_per_paper** (valeur continue) : 
-- **proj_ai** (valeur continue) : 
-- **proj_ai_year** (valeur temporelle) : 
+- **journal_name** (valeur catégorique) : Le nom du journal.
+- **issn** (valeur catégorique) : L'ISSN du journal.
+- **citation_count_sum** (valeur continue) : Le nombre de citation du journal.
+- **paper_count_sum** (valeur continue) : Le nombre d'articles scientifiques du journal.
+- **avg_cites_per_paper** (valeur continue) : La moyenne du nombre de citation par article du journal.
+- **proj_ai** (valeur continue) : Le score d'influence associé à la moyenne des citations.
+- **proj_ai_year** (valeur temporelle) : La date associé au calcul du score d'influence.
 """
 
 # %%
@@ -246,13 +256,63 @@ Nous pouvons déjà observer les colonnes suivantes et imaginer une petite descr
 
 # %%
 """
-Il n'y a presque aucune données manquantes dans la table `influence`. De plus, les trois seules colonnes en possédant
-ont exactement le même nombre de données manquantes : `citation_count_sum`, `paper_count_sum`, `avg_cites_per_paper` et
-`proj_ai`.
+Il n'y a presque aucune données manquantes dans la table `influence` si on ignore la colonne url qui entièrement vide.
+De plus, les trois colonnes en possédant un peu, `citation_count_sum`, `paper_count_sum`, `avg_cites_per_paper` et
+`proj_ai`, ont exactement le même nombre de données manquantes : 0.36%
+.
+
+La colonne `journal_name` ne semble pas avoir de problème mis à part quelques données dupliquées.
 """
 
 # %%
+# Compute ratio of unique values
+print(f"Ratio de valeurs uniques pour l'index : {len(np.unique(influence.index)) / influence.shape[0]:.0%}")
+print(f"Ratio de valeurs uniques pour issn : {influence['issn'].nunique() / influence.shape[0]:.0%}")
 
+# %%
+"""
+L'index et les ISSN sont bien uniques.
+"""
+
+# %%
+show_continuous_col_stats(influence, "citation_count_sum")
+
+# %%
+"""
+On peut noter un très grande dispertion des valeurs du nombre de citations qui peut faire pense à une distribution de
+Poisson. De nombreux journaux n'ont pas beaucoup de citation (environs 636) alors que certains journaux se dispersent
+entre des valeurs de 10 000 à 430 000 citations.
+"""
+
+# %%
+show_continuous_col_stats(influence, "avg_cites_per_paper")
+
+# %%
+"""
+Là encore la similarité avec la loi de Poisson est visible mais cette fois-ci la dispersion des données est bien moins
+présente. On note tout de même un pic autour de la valeur 1.75 et des valeurs allant jusqu'à 27. 
+"""
+
+# %%
+show_continuous_col_stats(influence, "proj_ai")
+
+# %%
+"""
+Cette colonne étant le résultat d'un rapport entre les deux dernières colonnes, il n'est pas très surprenant d'observer
+une dernière fois la Loi de Poisson avec un mode autour de la valeur 0.4 et une dispertion jusqu'à 11.
+"""
+
+# %%
+print("Liste des valeurs uniques de proj_ai_year :")
+for year in influence["proj_ai_year"].unique():
+    print(f"\t- {year}")
+
+# %%
+"""
+Surprenemment, nous pouvons noter que seule l'année 2015 est présente dans cette colonne.
+
+Finalement, la dernière colonne étant complètement vide, il est difficile d'en tirer quelques informations que ce soit.
+"""
 
 # %%
 """
@@ -263,7 +323,103 @@ incohérences s’il y en a.*
 """
 
 # %%
+"""
+### Table `journal`
 
+On pourrait supposer que les ISSN permettent de définir une revue de façon unique, cependant, il existe de nombreuses
+lignes dupliquées qui possèdent exactement les mêmes informations hormis leur ISSN. Il nous faut donc trouver un 
+sous-ensemble de colonne qui nous permettrons de définir des duplicatas. 
+
+Une deuxième hypothèse que nous pouvons faire est qu'un journal est représenté par son nom et qu'il est peu probable que
+deux journaux différents possède le même nom. Nous allons donc considérer que deux lignes possédant le même nom de
+journal sont des duplicatas. Pour différencier deux deuplicatas nous allons ensuite calculer un poids correspondant au
+nombre de valeur non manquantes + 5 si la colonne `category` est non manquante. Ce choix de privilégier la colonne
+`category` est fait de façon à privilégier les lignes avec cette colonne car elle sera importante pour les prédictions
+des questions suivantes.
+"""
+
+# %%
+# Clean string columns
+journal["issn"] = journal["issn"].str.strip()
+journal["journal_name"] = journal["journal_name"].str.strip()
+journal["pub_name"] = journal["pub_name"].str.strip()
+journal["category"] = journal["category"].str.strip()
+journal["url"] = journal["url"].str.strip()
+
+# remove duplicated values
+not_na_count = journal.notnull().sum(axis=1)
+row_to_keep = not_na_count.mask(journal["category"].notna(), not_na_count+5).groupby(journal["journal_name"]).idxmax()
+journal = journal.loc[row_to_keep]
+
+print(f"Nombre de lignes condérées comme dupliquées supprimées : {not_na_count.shape[0] - row_to_keep.shape[0]}")
+
+# Replace inconsistant seperators by one so that we can seperate the values easily later
+journal["category"] = journal["category"].str.replace(r"\s*([|.,]|and)\s*", ',')
+
+# %%
+"""
+### Table `price`
+
+Cette table étant une liste horodatée de prix pour un journal, nous pouvons donc utiliser le couple des colonnes 
+`date_stamp` et `journal_id` pour chercher les duplicatas.
+"""
+
+# %%
+# Clean string columns
+price["journal_id"] = price["journal_id"].str.strip()
+price["url"] = price["url"].str.strip()
+
+# Check duplicates
+price[price.duplicated(subset=["date_stamp", "journal_id"]) & ~price.duplicated(subset=["date_stamp", "journal_id", "price"])]
+
+# %%
+"""
+Seul un article possède un prix différent pour la même date (id `13073` et `16473`). En visitant le [site de la revue](https://jpl.letras.ulisboa.pt/about/submissions/)
+on peut trouver la mention de publiction fee de £330. On peut donc considérer la deuxième ligne avec un prix affiché de
+$387.15 comme étant la bonne ligne.
+"""
+
+# %%
+# Delete the wrong article found
+price.drop(13073, inplace=True)
+
+# Delete the other duplicates
+price.drop_duplicates(subset=["date_stamp", "journal_id"], inplace=True)
+
+# %%
+"""
+Nous avions aussi trouvé une URL incohérente lors de la question 1 et l'avons déjà supprimé à ce moment là.
+
+De plus, nous avions aussi trouvé de très nombreuses valeurs incohérentes dans la colonne `influence_id`. Par conséquent,
+nous allons la supprimer. 
+"""
+
+# %%
+price.drop("influence_id", axis=1, inplace=True)
+
+# %%
+"""
+### Table `influence`
+
+Pour cette table, à l'instar de `journal`, nous ne pouvons pas nous baser sur la colonne ISSN car plusieurs lignes sont
+identiques si on exclu la vérification de l'ISSN.
+"""
+
+# %%
+# clean string columns
+influence["journal_name"] = influence["journal_name"].str.strip()
+influence["issn"] = influence["issn"].str.strip()
+influence["url"] = influence["url"].str.strip()
+
+# drop duplicates
+influence.drop_duplicates(subset=influence.drop("issn", axis=1).columns, inplace=True)
+
+# %%
+"""
+Finalement, la colonne `url` étant entièrement vide, il nous semble inutile de la garder. De plus, la colonne
+`proj_ai_year` ne possède qu'une seule valeur non nulle, il nous semble donc peu utile de la garder aussi.
+"""
+influence.drop(["proj_ai_year", "url"], axis=1, inplace=True)
 
 # %%
 """
