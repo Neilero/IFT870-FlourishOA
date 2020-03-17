@@ -209,7 +209,7 @@ for index, row in incoherent_influence_url.iterrows():
 
 # remove incoherent values
 for index in incoherent_influence_url.index:
-    influence.at[index, "url"] = np.NaN
+    price.at[index, "url"] = np.NaN
 
 # %%
 """
@@ -256,10 +256,9 @@ Nous pouvons déjà observer les colonnes suivantes et imaginer une petite descr
 
 # %%
 """
-Il n'y a presque aucune données manquantes dans la table `influence` si on ignore la colonne url qui entièrement vide.
-De plus, les trois colonnes en possédant un peu, `citation_count_sum`, `paper_count_sum`, `avg_cites_per_paper` et
-`proj_ai`, ont exactement le même nombre de données manquantes : 0.36%
-.
+Il n'y a presque aucune données manquantes dans la table `influence`. De plus, les quatres seules colonnes en possédant
+un peu, `citation_count_sum`, `paper_count_sum`, `avg_cites_per_paper` et `proj_ai`, ont exactement le même nombre de
+données manquantes : 0.36%.
 
 La colonne `journal_name` ne semble pas avoir de problème mis à part quelques données dupliquées.
 """
@@ -310,8 +309,6 @@ for year in influence["proj_ai_year"].unique():
 # %%
 """
 Surprenemment, nous pouvons noter que seule l'année 2015 est présente dans cette colonne.
-
-Finalement, la dernière colonne étant complètement vide, il est difficile d'en tirer quelques informations que ce soit.
 """
 
 # %%
@@ -343,7 +340,7 @@ des questions suivantes.
 journal["issn"] = journal["issn"].str.strip()
 journal["journal_name"] = journal["journal_name"].str.strip()
 journal["pub_name"] = journal["pub_name"].str.strip()
-journal["category"] = journal["category"].str.strip()
+journal["category"] = journal["category"].str.strip().str.lower()
 journal["url"] = journal["url"].str.strip()
 
 # remove duplicated values
@@ -354,7 +351,7 @@ journal = journal.loc[row_to_keep]
 print(f"Nombre de lignes condérées comme dupliquées supprimées : {not_na_count.shape[0] - row_to_keep.shape[0]}")
 
 # Replace inconsistant seperators by one so that we can seperate the values easily later
-journal["category"] = journal["category"].str.replace(r"\s*([|.,]|and)\s*", ',')
+journal["category"] = journal["category"].str.replace(r"\s*([|.,&]|and)\s*", '|', regex=True)
 
 # %%
 """
@@ -409,7 +406,6 @@ identiques si on exclu la vérification de l'ISSN.
 # clean string columns
 influence["journal_name"] = influence["journal_name"].str.strip()
 influence["issn"] = influence["issn"].str.strip()
-influence["url"] = influence["url"].str.strip()
 
 # drop duplicates
 influence.drop_duplicates(subset=influence.drop("issn", axis=1).columns, inplace=True)
@@ -419,7 +415,9 @@ influence.drop_duplicates(subset=influence.drop("issn", axis=1).columns, inplace
 Finalement, la colonne `url` étant entièrement vide, il nous semble inutile de la garder. De plus, la colonne
 `proj_ai_year` ne possède qu'une seule valeur non nulle, il nous semble donc peu utile de la garder aussi.
 """
-influence.drop(["proj_ai_year", "url"], axis=1, inplace=True)
+
+# %%
+influence.drop("proj_ai_year", axis=1, inplace=True)
 
 # %%
 """
@@ -428,7 +426,40 @@ coûts de publication (attribut « price ») ? Justifier la réponse.*
 """
 
 # %%
+"""
+Afin d'obtenir une corrélation plus précise nous pouvons essayer de ne garder qu'une ligne pour chaque journal. Ce
+faisant nous gardons les prix les plus récent afin d'obtenir des statistiques plus à jour.
+"""
 
+# %%
+# merge tables with the desired columns
+merge = journal.merge(price, left_on="issn", right_on="journal_id")
+
+# sort by date stamp
+merge.sort_values(by=["date_stamp"], ascending=False, inplace=True)
+
+# only keep the first line of the duplicated journal name
+merge.drop_duplicates(subset=["journal_name"], inplace=True)
+
+# drop unwanted columns
+merge.drop(merge.drop(["category", "price"], axis=1).columns, axis=1, inplace=True)
+
+# drop row where either the price or the category is missing
+merge.dropna(inplace=True)
+
+merge = pd.concat([merge, merge["category"].str.get_dummies()], axis=1)
+
+corr_cols = []
+corr_vals = []
+for col in merge.drop(["category", "price"], axis=1).columns:
+    group = merge[merge[col] == 1]
+    if group.shape[0] >= 10:
+        corr_cols.append(col)
+        corr_vals.append(group["price"].values)
+
+sns.barplot(data=corr_vals)
+plt.xticks(plt.xticks()[0], labels=corr_cols, rotation=55, ha="right")
+plt.show()
 
 # %%
 """
