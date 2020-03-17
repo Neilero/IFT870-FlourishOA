@@ -449,17 +449,29 @@ merge.dropna(inplace=True)
 
 merge = pd.concat([merge, merge["category"].str.get_dummies()], axis=1)
 
-corr_cols = []
-corr_vals = []
+correlations = []
 for col in merge.drop(["category", "price"], axis=1).columns:
     group = merge[merge[col] == 1]
-    if group.shape[0] >= 10:
-        corr_cols.append(col)
-        corr_vals.append(group["price"].values)
+    if group.shape[0] >= 10:    # filter out the category with not much data
+        correlations.append([col, group["price"].values])
 
-sns.barplot(data=corr_vals)
-plt.xticks(plt.xticks()[0], labels=corr_cols, rotation=55, ha="right")
+# sort by prices' mean and extract values to list of cols and list of values
+correlations = list(zip(*sorted(correlations, key=lambda corr: corr[1].mean(), reverse=True)))
+
+sns.barplot(data=correlations[1])
+plt.xticks(plt.xticks()[0], labels=correlations[0], rotation=55, ha="right")
 plt.show()
+
+# %%
+"""
+Comme nous pouvons le voir sur le graphique ci-dessus, il semble que les catégories avec les prix les plus élevés soient
+semble être lié aux différentes catégories des sciences (médecine, biologie, phisique, chimie...). A contrario, il
+semble que les catégories avec les plus faibles prix soit tournent autours des arts, de la politique, de la litérature,
+de l'histoire...
+
+En résumé, nous pouvons dire que dans le cadre de nos données il existe une corrélation entre les colonnes `price` et
+`category`.
+"""
 
 # %%
 """
