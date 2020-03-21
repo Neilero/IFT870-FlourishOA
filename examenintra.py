@@ -13,7 +13,11 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import re
 from datetime import datetime
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.multioutput import MultiOutputClassifier
+from sklearn.model_selection import GridSearchCV, train_test_split
+from difflib import SequenceMatcher
 from tqdm import tqdm
 
 # extract data
@@ -45,8 +49,8 @@ Nous pouvons déjà observer les colonnes suivantes et imaginer une petite descr
 il s'agit d'un numéro permettant d'identifier une série de publication de façon unique.
 - **journal_name** (valeur catégorique) : Le nom du journal
 - **pub_name** (valeur catégorique) : Le nom de l'éditeur
-- **is_hybrid** (valeur booléenne) : (D'après le site [FlourishOA](http://flourishoa.org/about#type)) Permet de savoir si le journal est
-hybride. C'est-à-dire, si le journal est à abonnement avec certains articles en accès libre.
+- **is_hybrid** (valeur booléenne) : (D'après le site [FlourishOA](http://flourishoa.org/about#type)) Permet de savoir
+si le journal est hybride. C'est-à-dire, si le journal est à abonnement avec certains articles en accès libre.
 - **category** (valeur catégorique) : La liste des catégories de la revue scientifique.
 - **url** (valeur catégorique) : L'adresse web de la page d'acceuil du journal
 """
@@ -439,7 +443,7 @@ merge = journal.merge(price, left_on="issn", right_on="journal_id")
 merge.sort_values(by=["date_stamp"], ascending=False, inplace=True)
 
 # only keep the first line of the duplicated journal name
-merge.drop_duplicates(subset=["journal_name"], inplace=True)
+merge.drop_duplicates(subset=["journal_name"], keep="first", inplace=True)
 
 # drop unwanted columns
 merge.drop(merge.drop(["category", "price"], axis=1).columns, axis=1, inplace=True)
@@ -483,7 +487,99 @@ effectués.*
 """
 
 # %%
+"""
+Pour prédire les valeurs des catégories nous allons utiliser les différentes statistiques présentes dans `influence` et
+les prix présents dans `price`. Nous allons aussi calculer la distance entre les catégories et les deux premières
+colonnes de `journal` (`journal_name` et `pub_name`). Pour cette distance, nous allons calculer la longueur de la
+sous-chaine commune la plus longue et la diviser par la taille de la catégorie afin d'obtenir un "pourcentage de
+ressemblance".
 
+Pour le modèle, nous allons utiliser un `MultiOutputClassifier` (pour pouvoir prédire plusieurs catégories à un journal)
+avec un `RandomForestClassifier` (pour bénéficier de la capacité des arbres décisionnels et de leur simplicité). Enfin,
+pour les hyper-paramètres, nous allons utiliser un `GridSearchCV`.
+"""
+
+# %%
+# merge all data frames
+merge = journal.merge(price, left_on="issn", right_on="journal_id").merge(influence, on="issn")
+merge.rename(columns={"journal_name_x": "journal_name"}, inplace=True)
+
+# drop unwanted columns
+desired_cols = ["journal_name", "pub_name", "price", "citation_count_sum", "paper_count_sum", "avg_cites_per_paper",
+                "proj_ai", "category"]
+cat_model_data = merge.drop(merge.drop(desired_cols, axis=1).columns, axis=1)
+
+# drop lines missing data used for prediction
+desired_cols.remove("category") # we want to predict the missing categories at the end
+cat_model_data.dropna(subset=desired_cols, inplace=True)
+
+# compute training data targets
+train_mask = cat_model_data["category"].notna()
+cat_targets = cat_model_data[train_mask]["category"].str.get_dummies(sep='|')
+cat_model_data.drop("category", axis=1, inplace=True)
+
+# lower journal_name strings to make the string distance ignore cases
+cat_model_data["journal_name"] = cat_model_data["journal_name"].str.lower()
+
+# define the distance between a string (journal_name or pub_name) and a category
+def category_dist(row, base_col, category):
+    name = row[base_col]
+    if name is np.NaN:
+        return 0
+    len_match = SequenceMatcher(a=name, b=category).find_longest_match(0, len(name), 0, len(category)).size
+    return len_match / len(category)
+
+# compute the journal_name and pub_name distances with the categories for the data
+apply_category_dist = lambda df, base, cat: df.apply(category_dist, axis=1, base_col=base, category=cat)
+for category in tqdm(cat_targets.columns, desc="Computing distances between (journal_name, pub_name) and the categories"):
+    cat_model_data[f"journal_name_to_{category}_dist"] = apply_category_dist(cat_model_data, "journal_name", category)
+    cat_model_data[f"pub_name_to_{category}_dist"] = apply_category_dist(cat_model_data, "pub_name", category)
+
+# drop string columns
+cat_model_data.drop(["journal_name", "pub_name"], axis=1, inplace=True)
+
+# %%
+# define the hyper-parameter's grid search
+param_grid = {
+    "estimator__max_depth" : np.linspace(13, 15, 3, dtype=int),
+    "estimator__n_estimators" : np.linspace(100, 200, 3, dtype=int)
+}
+
+# Create the model
+rfc = RandomForestClassifier(n_jobs=-1)
+moc = MultiOutputClassifier(rfc, n_jobs=-1)
+cat_model = GridSearchCV(moc, cv=2, param_grid=param_grid, n_jobs=-1, verbose=1)
+
+# Train model
+X_train, X_test, y_train, y_test = train_test_split(cat_model_data[train_mask], cat_targets, test_size=0.2)
+cat_model.fit(X_train, y_train)
+print(f"Train accuracy : {cat_model.score(X_train, y_train):.2%}")
+print(f"Test  accuracy : {cat_model.score(X_test, y_test):.2%}")
+print(f"Best params : {cat_model.best_params_}")
+
+# %%
+# Predict missing categories
+predicted_cat = pd.DataFrame(cat_model.predict(cat_model_data), index=cat_model_data.index)
+
+# show stats about predicted data
+sns.barplot(data=predicted_cat.sum(axis=0))
+plt.xticks(plt.xticks()[0], labels=cat_targets.columns, rotation=55, ha="right")
+plt.show()
+
+# replace line where the category in know by its representation in one hot
+predicted_cat.mask(train_mask, cat_targets, inplace=True, axis=0)
+
+# add the resulting data to the merge data
+predicted_cat.reindex(merge.index)
+predicted_cat.fillna(0.)    # these are the categories we could not predict because of missing data
+merge = pd.concat([merge, predicted_cat], axis=1)
+
+# %%
+"""
+Comme on peut le voir sur le graphique la répartition des catégories prédites n'est pas consistante. On remarque en
+particulier `medecine` qui est bien plus prédite que le reste et certaines catégorie ne semble pas être prédites une
+seule fois. Malgré cela, le modèle obtient quand même un bon score de généralisation / de test. 
+"""
 
 # %%
 """
@@ -493,7 +589,11 @@ effectués.*
 """
 
 # %%
+def drop_empty_columns(df, threshold=0.5):
+    df.drop(df.columns[(df.isna().sum() / df.shape[0]) > threshold], axis=1, inplace=True)
 
+for df in [journal, price, influence]:
+    drop_empty_columns(df)
 
 # %%
 """
@@ -505,7 +605,69 @@ Lister les 10 revues qui s’écartent le plus (en + ou -) de la valeur prédite
 """
 
 # %%
+"""
+Pour calculer les coûts actuels de publication, nous allons encore une fois utiliser les différents attributs de la
+table `influence` et de `price`. À cela, nous allons aussi utiliser les catégories présentent dans `category` que nous
+complèteront avec le modèle précédemment entrainé.
 
+Pour le modèle de regression, nous allons cette fois-ci utiliser un `RandomForestRegressor` avec un `GridSearchCV` pour
+la recherche des hyper-paramètres.
+"""
+
+# %%
+# drop unwanted columns
+desired_cols = ["citation_count_sum", "paper_count_sum", "avg_cites_per_paper", "proj_ai", "is_hybrid", "price"] \
+               + list(range(predicted_cat.shape[1])) # the one hots of the categories
+price_model_data = merge.drop(merge.drop(desired_cols, axis=1).columns, axis=1)
+
+# drop lines missing data used for prediction
+price_model_data.dropna(subset=desired_cols, inplace=True)
+
+# compute training data targets
+price_targets = price_model_data["price"]
+price_model_data.drop("price", axis=1, inplace=True)
+
+# %%
+# define the hyper-parameter's grid search
+param_grid = {
+    "max_depth" : np.linspace(13, 17, 5, dtype=int),
+    "n_estimators" : np.linspace(100, 200, 11, dtype=int)
+}
+
+# Create the model
+rfr = RandomForestRegressor(n_jobs=-1)
+price_model = GridSearchCV(rfr, cv=2, param_grid=param_grid, n_jobs=-1, verbose=1)
+
+# Train model
+X_train, X_test, y_train, y_test = train_test_split(price_model_data, price_targets, test_size=0.2)
+price_model.fit(X_train, y_train)
+print(f"Train accuracy : {price_model.score(X_train, y_train):.2%}")
+print(f"Test  accuracy : {price_model.score(X_test, y_test):.2%}")
+print(f"Best params : {price_model.best_params_}")
+
+# %%
+# Compute the absolute price difference
+predicted_price = price_model.predict(price_model_data)
+predicted_price -= price_targets
+predicted_price = np.abs(predicted_price)
+predicted_price = pd.Series(predicted_price, index=price_model_data.index).sort_values(ascending=False)
+predicted_price = np.reshape(predicted_price, (-1, 1))
+
+# plot the first ten worst predictions
+fig, (ax1, ax2) = plt.subplots(1, 2)
+sns.barplot(x=merge["journal_name"][predicted_price[:10].index], y=predicted_price[:10])
+plt.xticks(rotation=25, ha="right")
+plt.show()
+
+# %%
+"""
+Comme nous pouvons le constater sur le graphique ci-dessus, les 10 plus grandes erreurs de prédictions sont comprises
+entre 2000 et 3000 avec une exception pour la première à 6000. Si on observe les données, nous pouvons nous rendre
+compte que le premier journal fut prédit à 0 alors que le prix du journal était de 6000 et inversement, le prix du
+deuxième journal fut prédit à 3000 au lieu de 0. Nous pouvons donc conclure que notre modèle est suffisement précis pour
+prédir le prix moyen des journaux mais n'est pas encore capable d'identifier des *outliers* qui proposent des prix bien
+différents des autres.
+"""
 
 # %%
 """
@@ -517,7 +679,13 @@ effectués.*
 """
 
 # %%
+clustering_data = merge[["proj_ai", "price"]].dropna()
+sns.scatterplot(x=clustering_data["proj_ai"], y=clustering_data["price"])
 
+# %%
+"""
+
+"""
 
 # %%
 """
