@@ -11,12 +11,13 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-import re
-from datetime import datetime
-from sklearn.preprocessing import MultiLabelBinarizer
+
+from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
+from sklearn.mixture import GaussianMixture
 from difflib import SequenceMatcher
 from tqdm import tqdm
 
@@ -62,7 +63,7 @@ si le journal est hybride. C'est-à-dire, si le journal est à abonnement avec c
 # %%
 """
 Nous pouvons remarquer que les colonnes `pub_name`, `category` et `url` possèdent des données manquantes. En particulier
-`category` et `url` qui ont environs 50% de données manquantes.
+`category` et `url` qui ont environ 50% de données manquantes.
 """
 
 # %%
@@ -95,19 +96,29 @@ journal["is_hybrid"] = journal["is_hybrid"].astype(bool)
 print(f"Ratio de revues hybrides : {journal['is_hybrid'].sum() / journal.shape[0]:.2%}")
 
 # %%
-"""
-On peut voir qu'il existe de gros éditeurs, en particulier `Springer` qui publie 14.3% des revues scientifiques.
-"""
-
-# %%
 journal["category"][11065:11070]
 
 # %%
 """
-Comme on peut le voir sur l'exemple ci-dessus, certaines revues possèdent plusieurs catégorie qui peuvent être séprarer
-par plusieurs caractères comme `|`, `.` et `and`.
+Comme on peut le voir sur l'exemple ci-dessus, certaines revues possèdent plusieurs catégories qui peuvent être
+séparées par plusieurs caractères comme `|`, `.` et `and`.
 
-Finalement, pour la colonne `url`, il y a une grande partie de données manquantes mais 
+Finalement, pour la colonne `url`, il y a une grande partie de données manquantes.
+"""
+
+# %%
+# show stats about categories
+categories, cat_counts = np.unique(journal["category"].dropna(), return_counts=True)
+categories = np.delete(categories, np.where(cat_counts < 100))
+cat_counts = np.delete(cat_counts, np.where(cat_counts < 100))
+sns.barplot(x=categories, y=cat_counts)
+plt.xticks(rotation=90)
+plt.show()
+
+# %%
+"""
+Comme on peut le voir, certaines catégories sont bien plus représenté que d'autres. De plus, certaines catégories sont
+dupliquées avec des polices différentes (comme `Medicine` et `MEDICINE`).
 """
 
 # %%
@@ -127,10 +138,10 @@ Nous pouvons déjà observer les colonnes suivantes et imaginer une petite descr
 - **journal_id** (valeur catégorique) : Il s'agit de l'ISSN du journal
 - **influence_id** (valeur catégorique) : On pourrait supposer qu'il s'agit d'un lien vers les lignes de la table
 `influence` mais la majorité des id situés dans cette colonne sont supérieurs au nombre de lignes que possède la table
-`influence` ce qui consititue alors des valeurs abérantes.
-- **url** (valeur catégorique) : L'adresse web de la revue vers la page d'informations pour les auteurs.
-- **license** (valeur catégorique) : Valeur numérique représentant une lisence (nous n'avons pas d'information sur la
-correspondance entre les valeurs numériques et les différentes lisences qui existent.
+`influence` ce qui constitue alors des valeurs aberrantes.
+- **url** (valeur catégorique) : L'adresse web de la revue vers la page d'information pour les auteurs.
+- **license** (valeur catégorique) : Valeur numérique représentant une licence (nous n'avons pas d'information sur la
+correspondance entre les valeurs numériques et les différentes license qui existent.
 """
 
 # %%
@@ -157,7 +168,7 @@ show_continuous_col_stats(price, "price")
 
 # %%
 """
-On remarque sur le graphique 4 groupes de prix des journaux. Un premier à 0, un deuxième entre 100 et 2900 environ, un
+On remarque sur le graphique, 4 groupes de prix des journaux. Un premier à 0, un deuxième entre 100 et 2900 environ, un
 troisième autour de la valeur 3000 et finalement un dernier groupe au-dessus de 3100.
 """
 
@@ -174,7 +185,7 @@ plt.show()
 
 # %%
 """
-On note sur le graphique que la plupart des données ont été ajouté en 2016 et 2017, une autre partie fut ajouté en 2012
+On note sur le graphique que la plupart des données ont été ajoutée en 2016 et 2017, une autre partie fut ajouté en 2012
 et 2013. La majorité des données est donc assez récente.
 """
 
@@ -192,7 +203,7 @@ print(f"Ratio de valeurs uniques pour (journal_id, date_stamp) : {multicolumn_du
 # %%
 """
 Contrairement à la table `journal` il existe plusieurs duplicatas des ISSN, en effet, certaines revues scientifiques
-ont eu des mise à jours de leurs informations.
+ont eu des mises à jours de leurs informations.
 """
 
 # %%
@@ -201,7 +212,7 @@ print(f"Ratio de valeurs incohérentes pour influence_id : {1 - (price['influenc
 
 # %%
 """
-La quasi-totalité des valeurs de `influence_id` sont soit manquantes soit ont une valeur supérieur à la valeur maximal
+La quasi-totalité des valeurs de `influence_id` sont soit manquantes soit ont une valeur supérieur à la valeur maximale
 des id de la table `influence`. Cette colonne ne semble donc pas être utile.
 """
 
@@ -217,8 +228,8 @@ for index in incoherent_influence_url.index:
 
 # %%
 """
-Bien qu'on ne retrouve qu'une seule valeur abérante, la majorité des valeurs reste manquente. Cela nuit donc fortement à
-l'interêt de cette colonne.
+Bien qu'on ne retrouve qu'une seule valeur aberrante, la majorité des valeurs reste manquante. Cela nuit donc fortement
+à l'intérêt de cette colonne.
 """
 
 # %%
@@ -228,9 +239,9 @@ plt.show()
 
 # %%
 """
-Comme nous pouvons le voir sur l'histogramme, la lisence 2 est majoritairement utilisée, on retrouve ensuite les
-lisences 10, 4 et 6. Cependant, ne pouvant faire l'equivalence entre ces numéros et le nom des licenses (ou groupes de
-lisences), les informations de cette colonne ne sont pas pertinentes. 
+Comme nous pouvons le voir sur l'histogramme, la licence 2 est majoritairement utilisée, on retrouve ensuite les
+licences 10, 4 et 6. Cependant, ne pouvant faire l'équivalence entre ces numéros et le nom des licences (ou groupes de
+licences), les informations de cette colonne ne sont pas pertinentes. 
 """
 
 # %%
@@ -247,11 +258,11 @@ influence.head()
 Nous pouvons déjà observer les colonnes suivantes et imaginer une petite description :
 - **journal_name** (valeur catégorique) : Le nom du journal.
 - **issn** (valeur catégorique) : L'ISSN du journal.
-- **citation_count_sum** (valeur continue) : Le nombre de citation du journal.
+- **citation_count_sum** (valeur continue) : Le nombre de citations du journal.
 - **paper_count_sum** (valeur continue) : Le nombre d'articles scientifiques du journal.
-- **avg_cites_per_paper** (valeur continue) : La moyenne du nombre de citation par article du journal.
+- **avg_cites_per_paper** (valeur continue) : La moyenne du nombre de citations par article du journal.
 - **proj_ai** (valeur continue) : Le score d'influence associé à la moyenne des citations.
-- **proj_ai_year** (valeur temporelle) : La date associé au calcul du score d'influence.
+- **proj_ai_year** (valeur temporelle) : La date associée au calcul du score d'influence.
 """
 
 # %%
@@ -260,7 +271,7 @@ Nous pouvons déjà observer les colonnes suivantes et imaginer une petite descr
 
 # %%
 """
-Il n'y a presque aucune données manquantes dans la table `influence`. De plus, les quatres seules colonnes en possédant
+Il n'y a presque aucune données manquante dans la table `influence`. De plus, les quatre seules colonnes en possédant
 un peu, `citation_count_sum`, `paper_count_sum`, `avg_cites_per_paper` et `proj_ai`, ont exactement le même nombre de
 données manquantes : 0.36%.
 
@@ -282,8 +293,8 @@ show_continuous_col_stats(influence, "citation_count_sum")
 
 # %%
 """
-On peut noter un très grande dispertion des valeurs du nombre de citations qui peut faire pense à une distribution de
-Poisson. De nombreux journaux n'ont pas beaucoup de citation (environs 636) alors que certains journaux se dispersent
+On peut noter un très grande dispersion des valeurs du nombre de citations qui peut faire pense à une distribution de
+Poisson. De nombreux journaux n'ont pas beaucoup de citation (environ 636) alors que certains journaux se dispersent
 entre des valeurs de 10 000 à 430 000 citations.
 """
 
@@ -302,7 +313,7 @@ show_continuous_col_stats(influence, "proj_ai")
 # %%
 """
 Cette colonne étant le résultat d'un rapport entre les deux dernières colonnes, il n'est pas très surprenant d'observer
-une dernière fois la Loi de Poisson avec un mode autour de la valeur 0.4 et une dispertion jusqu'à 11.
+une dernière fois la loi de Poisson avec un mode autour de la valeur 0.4 et une dispertion jusqu'à 11.
 """
 
 # %%
@@ -312,7 +323,7 @@ for year in influence["proj_ai_year"].unique():
 
 # %%
 """
-Surprenemment, nous pouvons noter que seule l'année 2015 est présente dans cette colonne.
+Surprenamment, nous pouvons noter que seule l'année 2015 est présente dans cette colonne.
 """
 
 # %%
@@ -334,7 +345,7 @@ sous-ensemble de colonne qui nous permettrons de définir des duplicatas.
 Une deuxième hypothèse que nous pouvons faire est qu'un journal est représenté par son nom et qu'il est peu probable que
 deux journaux différents possède le même nom. Nous allons donc considérer que deux lignes possédant le même nom de
 journal sont des duplicatas. Pour différencier deux deuplicatas nous allons ensuite calculer un poids correspondant au
-nombre de valeur non manquantes + 5 si la colonne `category` est non manquante. Ce choix de privilégier la colonne
+nombre de valeurs non manquantes + 5 si la colonne `category` est non manquante. Ce choix de privilégier la colonne
 `category` est fait de façon à privilégier les lignes avec cette colonne car elle sera importante pour les prédictions
 des questions suivantes.
 """
@@ -376,7 +387,7 @@ price[price.duplicated(subset=["date_stamp", "journal_id"]) & ~price.duplicated(
 # %%
 """
 Seul un article possède un prix différent pour la même date (id `13073` et `16473`). En visitant le [site de la revue](https://jpl.letras.ulisboa.pt/about/submissions/)
-on peut trouver la mention de publiction fee de £330. On peut donc considérer la deuxième ligne avec un prix affiché de
+on peut trouver la mention de *publiction fee* de £330. On peut donc considérer la deuxième ligne avec un prix affiché de
 $387.15 comme étant la bonne ligne.
 """
 
@@ -389,7 +400,7 @@ price.drop_duplicates(subset=["date_stamp", "journal_id"], inplace=True)
 
 # %%
 """
-Nous avions aussi trouvé une URL incohérente lors de la question 1 et l'avons déjà supprimé à ce moment là.
+Nous avions aussi trouvé une URL incohérente lors de la question 1 et l'avons déjà supprimé à ce moment-là.
 
 De plus, nous avions aussi trouvé de très nombreuses valeurs incohérentes dans la colonne `influence_id`. Par conséquent,
 nous allons la supprimer. 
@@ -432,7 +443,7 @@ coûts de publication (attribut « price ») ? Justifier la réponse.*
 # %%
 """
 Afin d'obtenir une corrélation plus précise nous pouvons essayer de ne garder qu'une ligne pour chaque journal. Ce
-faisant nous gardons les prix les plus récent afin d'obtenir des statistiques plus à jour.
+faisant nous gardons les prix les plus récents afin d'obtenir des statistiques plus à jour.
 """
 
 # %%
@@ -469,8 +480,8 @@ plt.show()
 # %%
 """
 Comme nous pouvons le voir sur le graphique ci-dessus, il semble que les catégories avec les prix les plus élevés soient
-semble être lié aux différentes catégories des sciences (médecine, biologie, phisique, chimie...). A contrario, il
-semble que les catégories avec les plus faibles prix soit tournent autours des arts, de la politique, de la litérature,
+sembles être liées aux différentes catégories des sciences (médecine, biologie, phisique, chimie...). A contrario, il
+semble que les catégories avec les plus faibles prix soient tournées autour des arts, de la politique, de la litérature,
 de l'histoire...
 
 En résumé, nous pouvons dire que dans le cadre de nos données il existe une corrélation entre les colonnes `price` et
@@ -489,14 +500,15 @@ effectués.*
 # %%
 """
 Pour prédire les valeurs des catégories nous allons utiliser les différentes statistiques présentes dans `influence` et
-les prix présents dans `price`. Nous allons aussi calculer la distance entre les catégories et les deux premières
-colonnes de `journal` (`journal_name` et `pub_name`). Pour cette distance, nous allons calculer la longueur de la
-sous-chaine commune la plus longue et la diviser par la taille de la catégorie afin d'obtenir un "pourcentage de
-ressemblance".
+les prix présents dans `price`. Nous n'utiliserons cependant pas les données de `date_stamp` et de `is_hybrid` car ses
+données ont plus un lien avec le prix qu'avec les catégories. Nous allons aussi calculer la distance entre les
+catégories et les deux premières colonnes de `journal` (`journal_name` et `pub_name`). Pour cette distance, nous allons
+calculer la longueur de la sous chaine commune la plus longue et la diviser par la taille de la catégorie afin d'obtenir
+un "pourcentage de ressemblance".
 
 Pour le modèle, nous allons utiliser un `MultiOutputClassifier` (pour pouvoir prédire plusieurs catégories à un journal)
 avec un `RandomForestClassifier` (pour bénéficier de la capacité des arbres décisionnels et de leur simplicité). Enfin,
-pour les hyper-paramètres, nous allons utiliser un `GridSearchCV`.
+pour les hyperparamètres, nous allons utiliser un `GridSearchCV`.
 """
 
 # %%
@@ -562,8 +574,8 @@ print(f"Best params : {cat_model.best_params_}")
 predicted_cat = pd.DataFrame(cat_model.predict(cat_model_data), index=cat_model_data.index)
 
 # show stats about predicted data
-sns.barplot(data=predicted_cat.sum(axis=0))
-plt.xticks(plt.xticks()[0], labels=cat_targets.columns, rotation=55, ha="right")
+sns.barplot(x=cat_targets.columns, y=predicted_cat.sum(axis=0))
+plt.xticks(rotation=90)
 plt.show()
 
 # replace line where the category in know by its representation in one hot
@@ -577,8 +589,9 @@ merge = pd.concat([merge, predicted_cat], axis=1)
 # %%
 """
 Comme on peut le voir sur le graphique la répartition des catégories prédites n'est pas consistante. On remarque en
-particulier `medecine` qui est bien plus prédite que le reste et certaines catégorie ne semble pas être prédites une
-seule fois. Malgré cela, le modèle obtient quand même un bon score de généralisation / de test. 
+particulier `medicine` qui est bien plus prédite que le reste et certaines catégories ne semble pas être prédites une
+seule fois. Ce résultat pouvait être attendu, car comme nous l'avons vu dans la question 1, `medicine` est la catégorie
+la plus représentée. Malgré cela, le modèle obtient quand même un bon score de généralisation / de test.
 """
 
 # %%
@@ -607,18 +620,21 @@ Lister les 10 revues qui s’écartent le plus (en + ou -) de la valeur prédite
 # %%
 """
 Pour calculer les coûts actuels de publication, nous allons encore une fois utiliser les différents attributs de la
-table `influence` et de `price`. À cela, nous allons aussi utiliser les catégories présentent dans `category` que nous
-complèteront avec le modèle précédemment entrainé.
+table `influence` et de `price`. À cela, nous allons aussi utiliser les catégories présentes dans `category` que nous
+compléterons avec le modèle précédemment entrainé.
 
 Pour le modèle de regression, nous allons cette fois-ci utiliser un `RandomForestRegressor` avec un `GridSearchCV` pour
-la recherche des hyper-paramètres.
+la recherche des hyperparamètres.
 """
 
 # %%
 # drop unwanted columns
-desired_cols = ["citation_count_sum", "paper_count_sum", "avg_cites_per_paper", "proj_ai", "is_hybrid", "price"] \
-               + list(range(predicted_cat.shape[1])) # the one hots of the categories
+desired_cols = ["citation_count_sum", "paper_count_sum", "avg_cites_per_paper", "proj_ai", "is_hybrid", "price",
+                "date_stamp"] + list(range(predicted_cat.shape[1])) # the one hots of the categories
 price_model_data = merge.drop(merge.drop(desired_cols, axis=1).columns, axis=1)
+
+# only keep the year for the date stamp
+price_model_data["date_stamp"] = price_model_data["date_stamp"].apply(lambda date: date.year)
 
 # drop lines missing data used for prediction
 price_model_data.dropna(subset=desired_cols, inplace=True)
@@ -651,10 +667,8 @@ predicted_price = price_model.predict(price_model_data)
 predicted_price -= price_targets
 predicted_price = np.abs(predicted_price)
 predicted_price = pd.Series(predicted_price, index=price_model_data.index).sort_values(ascending=False)
-predicted_price = np.reshape(predicted_price, (-1, 1))
 
 # plot the first ten worst predictions
-fig, (ax1, ax2) = plt.subplots(1, 2)
 sns.barplot(x=merge["journal_name"][predicted_price[:10].index], y=predicted_price[:10])
 plt.xticks(rotation=25, ha="right")
 plt.show()
@@ -662,11 +676,10 @@ plt.show()
 # %%
 """
 Comme nous pouvons le constater sur le graphique ci-dessus, les 10 plus grandes erreurs de prédictions sont comprises
-entre 2000 et 3000 avec une exception pour la première à 6000. Si on observe les données, nous pouvons nous rendre
-compte que le premier journal fut prédit à 0 alors que le prix du journal était de 6000 et inversement, le prix du
-deuxième journal fut prédit à 3000 au lieu de 0. Nous pouvons donc conclure que notre modèle est suffisement précis pour
-prédir le prix moyen des journaux mais n'est pas encore capable d'identifier des *outliers* qui proposent des prix bien
-différents des autres.
+entre 2000 et 3000 en moyenne. Si on observe les données, nous pouvons nous rendre compte que les premières erreurs sont
+souvent dues à des prédictions non nulles pour des journaux avec des prix nuls et inversement. Nous pouvons donc
+conclure que notre modèle est suffisement précis pour prédire le prix moyen des journaux mais n'est pas encore capable
+d'identifier des *outliers* qui proposent des prix bien différents des autres.
 """
 
 # %%
@@ -684,7 +697,42 @@ sns.scatterplot(x=clustering_data["proj_ai"], y=clustering_data["price"])
 
 # %%
 """
+D'après le graphique, il semble exister un grand cluster de journaux avec des prix compris entre 0 et 3000 et avec un
+score d'influence entre 0 et 2. A coté de ce cluster, nous pouvons observer de nombreux points plus ou moins isolés qui
+pourraient être considérés comme des *outliers*.
 
+Cette disposition des points semble indiquer que l'approche par K-means pourrait avoir comme résultat de diviser le
+grand cluster et de regrouper les outliers avec les sous clusters du grand cluster. Par conséquent, nous allons donc
+nous interessé aux approches basées sur la densité. Nous allons aussi centrer et réduire les données.
+"""
+
+# %%
+# Center and reduce data
+clustering_model_data = StandardScaler().fit_transform(clustering_data)
+
+# Create the models
+clustering_models = [
+    KMeans(n_clusters=3),
+    AgglomerativeClustering(n_clusters=4, linkage="ward"),
+    DBSCAN(eps=0.5, min_samples=5, n_jobs=-1),
+    GaussianMixture(n_components=3, covariance_type="full")
+]
+
+# Run models, save and show results
+predicted_clusters = []
+for model in clustering_models:
+    clusters = model.fit_predict(clustering_model_data)
+    predicted_clusters.append(clusters)
+
+    palette = sns.color_palette("hls", len(np.unique(clusters)))
+    graph = sns.scatterplot(x=clustering_data["proj_ai"], y=clustering_data["price"], hue=clusters, palette=palette)
+    graph.set_title(f"Clustering by {type(model).__name__}")
+    plt.show()
+
+# %%
+"""
+Comme nous l'avions prévu, certains clusterings dissocie le grand ensemble de points en différents clusters. Seul
+`DBSCAN` semble bien identifier un grand cluster, quelques petits clusters et plusieurs *outliers*.
 """
 
 # %%
@@ -695,4 +743,29 @@ meilleur cluster en termes de rapport moyen : score d’influence / coût de pub
 
 # %%
 
+bestClusterIndex = None
+bestClusterRatio = 0
+for i, clusters in enumerate(predicted_clusters):
+    clustering_data["clusters"] = clusters
 
+    print(f"--- Statistiques du clustering de {type(clustering_models[i]).__name__} ---")
+    for clusterId, cluster in clustering_data.groupby(["clusters"]):
+        # skip outliers
+        if clusterId == -1:
+            continue
+
+        print(f"\tCluster {clusterId} :")
+        print(cluster[["price", "proj_ai"]].describe())
+
+        mean_ratio = cluster['proj_ai'].mean() / (cluster['price'].mean() + 1e-3)
+        print(f"Rapport moyen : {mean_ratio}")
+        if mean_ratio > bestClusterRatio:
+            bestClusterRatio = mean_ratio
+            bestClusterIndex = cluster.index
+
+        print()
+    print()
+
+# print the best journals according to its ration
+print("Liste des meilleurs journaux selon leur rapport moyen :")
+merge.iloc[bestClusterIndex][["journal_name", "pub_name"]]
